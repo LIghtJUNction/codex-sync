@@ -24,11 +24,12 @@ pub struct SshReport {
     pub copied: usize,
     pub skipped: usize,
     pub conflicts: usize,
+    pub removed: usize,
     pub database_rows: usize,
     pub backup: String,
 }
 
-pub fn push(host: &str, codex_home: Option<PathBuf>) -> Result<SshReport> {
+pub fn push(host: &str, codex_home: Option<PathBuf>, keep_remote: bool) -> Result<SshReport> {
     validate_host(host)?;
     let home = dirs::home_dir().context("无法确定本机主目录")?;
     let codex_home = codex_home.unwrap_or_else(|| home.join(".codex"));
@@ -61,8 +62,9 @@ pub fn push(host: &str, codex_home: Option<PathBuf>) -> Result<SshReport> {
                 .arg(&destination),
             "上传本机会话包",
         )?;
+        let keep_flag = if keep_remote { " --keep-remote" } else { "" };
         let remote_command = format!(
-            "bin=$(command -v codex-sync || true); if [ -z \"$bin\" ] && [ -x \"$HOME/.cargo/bin/codex-sync\" ]; then bin=\"$HOME/.cargo/bin/codex-sync\"; fi; if [ -z \"$bin\" ]; then echo '远端未安装 codex-sync 0.2.0+' >&2; exit 127; fi; \"$bin\" ssh receive --bundle \"$HOME/{remote_rel}\""
+            "bin=$(command -v codex-sync || true); if [ -z \"$bin\" ] && [ -x \"$HOME/.cargo/bin/codex-sync\" ]; then bin=\"$HOME/.cargo/bin/codex-sync\"; fi; if [ -z \"$bin\" ]; then echo '远端未安装 codex-sync 0.2.1+' >&2; exit 127; fi; \"$bin\" ssh receive --bundle \"$HOME/{remote_rel}\"{keep_flag}"
         );
         let output = Command::new("ssh")
             .arg(host)
@@ -92,7 +94,7 @@ pub fn push(host: &str, codex_home: Option<PathBuf>) -> Result<SshReport> {
     result
 }
 
-pub fn receive(bundle: &Path, codex_home: Option<PathBuf>) -> Result<SshReport> {
+pub fn receive(bundle: &Path, codex_home: Option<PathBuf>, keep_remote: bool) -> Result<SshReport> {
     let home = dirs::home_dir().context("无法确定远端主目录")?;
     let codex_home = codex_home.unwrap_or_else(|| home.join(".codex"));
     fs::create_dir_all(&codex_home)?;
@@ -109,6 +111,9 @@ pub fn receive(bundle: &Path, codex_home: Option<PathBuf>) -> Result<SshReport> 
         backup: backup.to_string_lossy().into_owned(),
         ..Default::default()
     };
+    if !keep_remote {
+        report.removed = remove_remote_only_files(&codex_home, &manifest, &backup)?;
+    }
 
     for info in &manifest.files {
         if matches!(
@@ -122,10 +127,13 @@ pub fn receive(bundle: &Path, codex_home: Option<PathBuf>) -> Result<SshReport> 
         if target.exists() {
             if blake3::hash(&fs::read(&target)?).to_hex().as_str() == info.hash {
                 report.skipped += 1;
-            } else {
+                continue;
+            } else if keep_remote {
                 report.conflicts += 1;
+                continue;
+            } else {
+                atomic_copy(&target, &backup.join("replaced").join(&info.path))?;
             }
-            continue;
         }
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
@@ -140,7 +148,15 @@ pub fn receive(bundle: &Path, codex_home: Option<PathBuf>) -> Result<SshReport> 
     for name in ["session_index.jsonl", "history.jsonl"] {
         let source = bundle.join("files").join(name);
         if source.is_file() {
-            merge_jsonl(&source, &codex_home.join(name), &backup.join(name))?;
+            let target = codex_home.join(name);
+            if keep_remote {
+                merge_jsonl(&source, &target, &backup.join(name))?;
+            } else {
+                if target.is_file() {
+                    atomic_copy(&target, &backup.join(name))?;
+                }
+                atomic_copy(&source, &target)?;
+            }
         }
     }
     let source_db = bundle.join("files/state_5.sqlite");
@@ -152,12 +168,49 @@ pub fn receive(bundle: &Path, codex_home: Option<PathBuf>) -> Result<SshReport> 
                 &target_db,
                 &backup.join("state_5.sqlite"),
                 target_provider.as_deref(),
+                keep_remote,
             )?;
         } else {
             atomic_copy(&source_db, &target_db)?;
         }
     }
     Ok(report)
+}
+
+fn remove_remote_only_files(
+    codex_home: &Path,
+    manifest: &SshManifest,
+    backup: &Path,
+) -> Result<usize> {
+    let wanted: HashSet<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+    let mut removed = 0;
+    for root in ["sessions", "archived_sessions", "attachments"] {
+        let directory = codex_home.join(root);
+        if !directory.is_dir() {
+            continue;
+        }
+        for entry in WalkDir::new(&directory)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let rel = entry
+                .path()
+                .strip_prefix(codex_home)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if wanted.contains(rel.as_str()) {
+                continue;
+            }
+            atomic_copy(entry.path(), &backup.join("removed").join(&rel))?;
+            fs::remove_file(entry.path())?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 fn create_bundle(codex_home: &Path, bundle: &Path) -> Result<()> {
@@ -327,6 +380,7 @@ fn merge_database(
     target: &Path,
     backup: &Path,
     provider: Option<&str>,
+    keep_remote: bool,
 ) -> Result<usize> {
     let mut conn = Connection::open(target)?;
     conn.execute("VACUUM INTO ?1", params![backup.to_string_lossy().as_ref()])?;
@@ -336,6 +390,19 @@ fn merge_database(
     )?;
     let tx = conn.transaction()?;
     let mut inserted = 0;
+    if !keep_remote {
+        for table in ["thread_dynamic_tools", "thread_spawn_edges"] {
+            if table_exists(&tx, "main", table)? {
+                inserted += tx.execute(&format!("DELETE FROM main.\"{table}\""), [])?;
+            }
+        }
+        if table_exists(&tx, "main", "threads")? && table_exists(&tx, "src", "threads")? {
+            inserted += tx.execute(
+                "DELETE FROM main.threads WHERE id NOT IN (SELECT id FROM src.threads)",
+                [],
+            )?;
+        }
+    }
     for table in ["threads", "thread_dynamic_tools", "thread_spawn_edges"] {
         if !table_exists(&tx, "main", table)? || !table_exists(&tx, "src", table)? {
             continue;
@@ -360,8 +427,13 @@ fn merge_database(
                 }
             })
             .collect::<Vec<_>>();
+        let verb = if keep_remote {
+            "INSERT OR IGNORE"
+        } else {
+            "INSERT OR REPLACE"
+        };
         let sql = format!(
-            "INSERT OR IGNORE INTO main.\"{table}\" ({}) SELECT {} FROM src.\"{table}\"",
+            "{verb} INTO main.\"{table}\" ({}) SELECT {} FROM src.\"{table}\"",
             quoted.join(","),
             select.join(",")
         );
@@ -487,9 +559,10 @@ mod tests {
         drop(remote_db);
 
         create_bundle(&local, &bundle)?;
-        let report = receive(&bundle, Some(remote.clone()))?;
+        let report = receive(&bundle, Some(remote.clone()), false)?;
         assert_eq!(report.copied, 1);
-        assert_eq!(report.database_rows, 1);
+        assert!(report.database_rows >= 2);
+        assert_eq!(report.removed, 0);
         let imported = remote.join("sessions/2026/07/19/rollout-local.jsonl");
         let text = fs::read_to_string(imported)?;
         assert!(text.contains("\"model_provider\":\"remote-provider\""));
@@ -498,7 +571,7 @@ mod tests {
             .prepare("SELECT model_provider FROM threads ORDER BY id")?
             .query_map([], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
-        assert_eq!(providers, vec!["remote-provider", "remote-provider"]);
+        assert_eq!(providers, vec!["remote-provider"]);
         fs::remove_dir_all(root)?;
         Ok(())
     }

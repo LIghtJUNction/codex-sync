@@ -9,7 +9,7 @@ Use the repository's `codex-sync` Rust CLI to transfer Codex data without exposi
 
 ## Default direction
 
-Interpret “sync my local Codex records to DESTINATION” as a one-way local-to-destination upload. Use only the local `~/.codex` records as the source. Treat the destination as write-only storage for this operation: do not inspect, download, merge, or import its existing Codex records.
+Interpret “sync my local Codex records to DESTINATION” as a one-way local-to-destination mirror. Use only the local `~/.codex` records as the source. The destination's active chat history should end with the local record set; back up and remove destination-only chat records. Never download them. Preserve destination-only records only when the user explicitly asks, using `--keep-remote` for SSH.
 
 Only pull, restore, or merge records from a remote host into the local computer when the user explicitly asks for that direction. Never infer bidirectional synchronization from the word “sync”.
 
