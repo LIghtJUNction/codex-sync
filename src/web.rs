@@ -55,7 +55,7 @@ async fn status(State(cfg): State<AppState>, headers: HeaderMap) -> impl IntoRes
 }
 
 fn status_response(cfg: &Config) -> axum::response::Response {
-    match sync::manifest(cfg) {
+    match sync::core::manifest(cfg) {
         Ok(m) => axum::Json(m).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -93,15 +93,7 @@ async fn file(
 }
 
 fn read_served_file(cfg: &Config, path: &str) -> Result<Vec<u8>> {
-    let file = sync::safe_path(&cfg.sync_dir, path)?;
-    let meta = std::fs::symlink_metadata(&file)?;
-    if !meta.file_type().is_file() || meta.file_type().is_symlink() {
-        anyhow::bail!("拒绝非普通文件");
-    }
-    if meta.len() > cfg.max_file_size_bytes {
-        anyhow::bail!("文件超过大小上限");
-    }
-    Ok(std::fs::read(file)?)
+    sync::core::read_local_file(cfg, path)
 }
 
 #[derive(serde::Deserialize)]
@@ -117,7 +109,7 @@ async fn pull(
     if !authorized(&headers, &cfg) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    match sync::pull(&cfg, &req.peer, req.overwrite.unwrap_or(false)).await {
+    match sync::http::pull(&cfg, &req.peer, req.overwrite.unwrap_or(false)).await {
         Ok(r) => axum::Json(r).into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
     }

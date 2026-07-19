@@ -2,6 +2,29 @@
 
 在同一局域网的多台电脑之间同步 Codex 聊天记录和配置。提供命令行与内置 Web 界面。
 
+## 架构
+
+同步能力分为“通用核心、Codex 语义合并、传输适配器”三层：
+
+```text
+HTTP / Web ───────┐
+USB / SMB / Relay ├─ SnapshotSource ─ sync::core
+                  │                    ├─ 清单、路径与哈希校验
+SSH ──────────────┴─ 安全传输包 ──────┼─ 原子读写与冲突策略
+                                       └─ sync::codex
+                                          ├─ rollout 增量去重
+                                          ├─ SQLite 合并
+                                          └─ session_index 修复
+```
+
+- `sync::core` 是唯一的文件级同步基础实现。Web/HTTP 只负责网络读取，USB、SMB 和 Relay 只负责目录读写；清单验证、增量判断、冲突保留、哈希验证和原子落盘全部复用核心逻辑。
+- `sync::codex` 是唯一的 Codex 数据语义实现。SSH 只负责调用系统 `ssh`/`scp` 传输安全包，rollout、SQLite 和侧栏索引的合并由该模块统一完成。
+- `SnapshotSource` 是传输来源的 Rust trait。新增 S3、对象存储或其他只读来源时，只需为新类型实现这个 trait 的 `manifest` 与 `read` 方法；新增共享目录类型可直接复用现有目录适配器。
+
+源码采用 Rust 2018+ 的模块布局：`sync.rs`/`sync/`、`cli.rs`/`cli/` 由同名文件声明同名目录中的子模块，不使用 `mod.rs`。`lib.rs` 暴露可复用库，`main.rs` 只负责启动 CLI。
+
+这样传输协议不再各自维护一套同步规则，安全校验和合并行为也不会随适配器增加而分叉。
+
 ## 快速开始
 
 ```bash
@@ -136,9 +159,40 @@ codex-sync cc-switch merge --apply
 如果切换 API、provider、模型或登录方式后，本机历史文件还在但 Codex 侧栏不再显示，可以使用不依赖 CC-Switch 的 `history` 命令。先预览：
 
 ```bash
+codex-sync history doctor
 codex-sync history status
 codex-sync history merge
 ```
+
+`history doctor` 是只读诊断命令，会检查 SQLite `quick_check`、非法会话 JSONL、缺失或重复的 `session_meta`、孤立或缺失的 rollout、重复/缺失/残留的侧栏索引。它默认永远不修改数据。
+
+只有侧栏索引存在可安全重建的问题时，才可执行：
+
+```bash
+codex-sync history doctor --apply
+```
+
+普通 `--apply` 不修改 SQLite、rollout 或 provider/model，只重建 `session_index.jsonl`。命令持有 SQLite 写锁，先保存原索引，在同目录写入并 `fsync` 临时文件后原子替换，随即复检；任何错误都会原子恢复原索引。非法 JSONL 和重复 `session_meta` 只会报告，不会被冒险自动修改。
+
+缺失 rollout 已经在备份中定位并人工确认时，可以显式恢复：
+
+```bash
+codex-sync history doctor \
+  --restore-missing ~/.codex/codex-sync-backups/.../rollout-ID.jsonl \
+  --apply
+```
+
+恢复前会验证来源是普通文件、大小受限、每行 JSON 合法、恰好包含一条 `session_meta`、线程 ID 和文件名均与数据库中缺失的 `rollout_path` 一致，并拒绝目录穿越或符号链接。目标 rollout 与索引分别使用原子替换，失败时删除新目标并恢复原索引。正式执行前仍建议完全退出 Codex 和 CC-Switch，避免应用在修复完成后用内存中的旧状态再次覆盖索引。
+
+对于已经停止写入、但混入多条 `session_meta` 的单个 rollout，可逐个执行：
+
+```bash
+codex-sync history doctor \
+  --dedupe-session-meta ~/.codex/sessions/.../rollout-ID.jsonl \
+  --apply
+```
+
+命令只保留线程数据库中该 `rollout_path` 对应 ID 的元数据行，其他事件行按原字节顺序保留。每次只处理一个文件，修改前保存原文件，提交前重新比较源字节，使用同步落盘后的原子替换；验证或提交失败时恢复原文件。正在写入的当前任务必须等 Codex 完全退出后再处理。
 
 确认待归并数量后执行：
 
@@ -181,7 +235,7 @@ codex-sync ssh push lty
 - 每个 rollout 始终只保留一条 `session_meta`；数据库合并后按线程 ID 自动重建 `session_index.jsonl`，避免记录已入库但侧栏缺失。
 - 仅在明确需要让远端完全等同于本机时，使用 `codex-sync ssh push HOST --mirror`；远端独有记录会先备份再移出活动历史。
 - 导入的会话自动归入远端当前 `model_provider`。
-- 修改前备份远端数据库和索引到 `~/.codex/codex-sync-backups/ssh-import-时间戳`。
+- 修改前备份远端数据库和索引到 `~/.codex/codex-sync-backups/sync-import-时间戳`。
 - 合并完成后自动删除两端临时传输包。
 
 如果远端尚未安装：
