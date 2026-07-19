@@ -35,6 +35,7 @@ impl Default for Config {
                 "logs".into(),
                 "cache".into(),
                 "tmp".into(),
+                "codex-sync-backups".into(),
                 ".DS_Store".into(),
             ],
             auto_pull_seconds: 0,

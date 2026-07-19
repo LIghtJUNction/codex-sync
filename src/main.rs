@@ -1,3 +1,4 @@
+mod cc_switch;
 mod config;
 mod discovery;
 mod sync;
@@ -58,6 +59,17 @@ enum Command {
     Relay {
         #[command(subcommand)]
         command: RelayCommand,
+    },
+    /// 检查或合并本机 CC-Switch 的 Codex 历史记录
+    CcSwitch {
+        #[command(subcommand)]
+        command: CcSwitchCommand,
+        /// 覆盖 Codex 数据目录（用于测试或非默认安装）
+        #[arg(long)]
+        codex_home: Option<PathBuf>,
+        /// 覆盖 CC-Switch 数据目录
+        #[arg(long)]
+        cc_switch_home: Option<PathBuf>,
     },
 }
 
@@ -124,6 +136,18 @@ enum RelayCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum CcSwitchCommand {
+    /// 显示当前账号及各历史记录桶的数量
+    Status,
+    /// 将所有历史记录归入当前登录账号；默认只预览
+    Merge {
+        /// 实际执行；未提供时不修改任何文件
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -131,6 +155,33 @@ async fn main() -> Result<()> {
     if let Command::Init { force } = cli.command {
         Config::init(&path, force)?;
         println!("配置已创建：{}", path.display());
+        return Ok(());
+    }
+
+    if let Command::CcSwitch {
+        command,
+        codex_home,
+        cc_switch_home,
+    } = &cli.command
+    {
+        let paths = cc_switch::Paths::resolve(codex_home.clone(), cc_switch_home.clone())?;
+        match command {
+            CcSwitchCommand::Status => {
+                let report = cc_switch::inspect(&paths)?;
+                cc_switch::print_report(&report);
+            }
+            CcSwitchCommand::Merge { apply } => {
+                let report = cc_switch::merge(&paths, *apply)?;
+                cc_switch::print_report(&report);
+                if *apply {
+                    if let Some(backup) = report.backup {
+                        println!("合并完成；备份：{}", backup.display());
+                    }
+                } else {
+                    println!("以上为预览。关闭 Codex 和 CC-Switch 后，添加 --apply 执行合并。");
+                }
+            }
+        }
         return Ok(());
     }
 
@@ -231,6 +282,7 @@ async fn main() -> Result<()> {
                 }
             }
         },
+        Command::CcSwitch { .. } => unreachable!(),
         Command::Init { .. } => unreachable!(),
     }
     Ok(())

@@ -107,6 +107,23 @@ codex-sync.exe relay pull "$env:OneDrive\CodexRelay"
 
 使用云同步目录时，请等待云盘客户端完成上传或下载后再执行 `pull`。清单采用最后写入的原子替换方式，未完成的快照不会被识别为可导入快照。
 
+## 合并 CC-Switch 多账号记录
+
+Codex Sync 可以把本机 CC-Switch 不同供应商产生的历史记录统一归入当前登录的 Codex 账号。先预览：
+
+```bash
+codex-sync cc-switch status
+codex-sync cc-switch merge
+```
+
+确认数量后，关闭 Codex 和 CC-Switch，再执行：
+
+```bash
+codex-sync cc-switch merge --apply
+```
+
+合并会同时更新会话 JSONL 的 `model_provider` 和 `state_5.sqlite` 的记录桶。执行前自动备份到 `~/.codex/codex-sync-backups/cc-switch-merge-时间戳`，该目录默认不会参与设备同步。此操作不读取、复制或修改 API Key、Token、`auth.json` 和供应商认证配置。
+
 ## 同步策略与安全
 
 - 默认同步 `~/.codex`，排除 `auth.json`、凭据、日志、缓存和临时文件。
