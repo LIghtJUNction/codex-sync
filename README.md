@@ -124,6 +124,10 @@ codex-sync cc-switch merge --apply
 
 合并会同时更新会话 JSONL 的 `model_provider` 和 `state_5.sqlite` 的记录桶。执行前自动备份到 `~/.codex/codex-sync-backups/cc-switch-merge-时间戳`，该目录默认不会参与设备同步。此操作不读取、复制或修改 API Key、Token、`auth.json` 和供应商认证配置。
 
+## 默认同步方向
+
+“把本机记录同步到某个目标”始终表示单向的“本机 → 目标”。目标端只作为写入位置，不会自动读取、下载或合并目标端已有的 Codex 记录。只有明确执行 `pull`、`import` 或提出从远端恢复时，才会把远端数据带回本机。
+
 ## 同步策略与安全
 
 - 默认同步 `~/.codex`，排除 `auth.json`、凭据、日志、缓存和临时文件。

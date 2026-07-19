@@ -7,6 +7,12 @@ description: Safely synchronize, migrate, back up, export, import, or relay Code
 
 Use the repository's `codex-sync` Rust CLI to transfer Codex data without exposing credentials or silently overwriting conflicts.
 
+## Default direction
+
+Interpret “sync my local Codex records to DESTINATION” as a one-way local-to-destination upload. Use only the local `~/.codex` records as the source. Treat the destination as write-only storage for this operation: do not inspect, download, merge, or import its existing Codex records.
+
+Only pull, restore, or merge records from a remote host into the local computer when the user explicitly asks for that direction. Never infer bidirectional synchronization from the word “sync”.
+
 ## Prepare
 
 1. Work from the repository root containing `Cargo.toml`.
@@ -23,6 +29,7 @@ Do not include `auth.json`, credential files, logs, caches, or temporary files. 
 - USB or removable disk: run `codex-sync usb export MOUNT`, then `codex-sync usb list MOUNT` and `codex-sync usb import MOUNT` on the destination.
 - Mounted SMB share: run `codex-sync smb push SHARE`, then `codex-sync smb list SHARE` and `codex-sync smb pull SHARE` on the destination. Let the operating system manage SMB credentials.
 - NFS, WebDAV, Syncthing, Dropbox, OneDrive, iCloud Drive, Google Drive, NAS, or any shared directory: run `codex-sync relay push DIR`, wait for the storage service to finish syncing, then run `codex-sync relay list DIR` and `codex-sync relay pull DIR` on the destination.
+- SSH destination: create a local-only snapshot, upload it to the requested remote path, and verify the uploaded copy. Do not enumerate or retrieve the remote host's existing `~/.codex` records unless the user explicitly requests a pull or restore.
 - CC-Switch accounts on one computer: run `codex-sync cc-switch status`, then `codex-sync cc-switch merge` for a dry-run. Ask the user to close Codex and CC-Switch before running `codex-sync cc-switch merge --apply`. Never apply without explicit confirmation; the command backs up affected records and does not migrate credentials.
 
 If `list` reports multiple snapshots, select the intended device snapshot path with the user and pass that exact path to `import` or `pull`.
