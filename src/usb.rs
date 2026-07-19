@@ -30,6 +30,13 @@ pub fn export(cfg: &Config, destination: &Path) -> Result<PathBuf> {
     let files_root = snapshot.join("files");
     fs::create_dir_all(&files_root)?;
 
+    // Hide an older manifest while the new snapshot is being copied. Readers only
+    // consider directories with a complete manifest importable.
+    let published_manifest = snapshot.join(MANIFEST);
+    if published_manifest.exists() {
+        fs::remove_file(&published_manifest)?;
+    }
+
     for file in &manifest.files {
         let source = sync::safe_path(&cfg.sync_dir, &file.path)?;
         let target = sync::safe_path(&files_root, &file.path)?;
@@ -41,7 +48,7 @@ pub fn export(cfg: &Config, destination: &Path) -> Result<PathBuf> {
     }
     let temp = snapshot.join("manifest.json.tmp");
     fs::write(&temp, serde_json::to_vec_pretty(&manifest)?)?;
-    fs::rename(temp, snapshot.join(MANIFEST))?;
+    fs::rename(temp, published_manifest)?;
     Ok(snapshot)
 }
 

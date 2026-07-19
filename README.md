@@ -40,10 +40,78 @@ codex-sync usb import /Volumes/MYUSB
 
 如果 U 盘中有多台电脑的快照，`usb list` 会显示每个快照的具体目录，导入时指定该目录即可。导入会验证 BLAKE3 哈希；同名但内容不同的文件默认保存为冲突副本。需要明确覆盖时使用 `usb import PATH --overwrite`。
 
+## SMB 服务器中转
+
+Codex Sync 使用操作系统已经挂载的 SMB 目录，不保存服务器用户名或密码。先通过系统连接共享：
+
+- macOS：访达 → 前往 → 连接服务器，输入 `smb://服务器/codex-sync`，通常挂载到 `/Volumes/codex-sync`。
+- Windows：在资源管理器映射网络驱动器，例如 `Z:`。
+- Linux：用桌面文件管理器挂载，或将共享挂载到 `/mnt/codex-sync`。
+
+电脑 A 推送快照：
+
+```bash
+codex-sync smb push /Volumes/codex-sync
+```
+
+电脑 B 查看并拉取：
+
+```bash
+codex-sync smb list /Volumes/codex-sync
+codex-sync smb pull /Volumes/codex-sync
+```
+
+Windows 示例：
+
+```powershell
+codex-sync.exe smb push Z:\
+codex-sync.exe smb pull Z:\
+```
+
+共享中有多个设备快照时，先通过 `smb list` 找到目标快照的完整路径，再将它传给 `smb pull`。默认保留冲突副本；明确覆盖时添加 `--overwrite`。SMB 快照和 U 盘快照使用相同的开放目录格式，可以相互复制。
+
+## 其他中转方式
+
+`relay` 支持任何在操作系统中表现为普通目录的中转服务，包括：
+
+- NFS、AFP 或 NAS 挂载目录
+- WebDAV 挂载盘
+- Syncthing、Resilio Sync 等点对点同步目录
+- Dropbox、OneDrive、iCloud Drive、Google Drive 等桌面同步目录
+- 虚拟机共享目录、远程开发共享目录
+
+通用用法：
+
+```bash
+# 电脑 A 发布快照
+codex-sync relay push /path/to/shared-folder
+
+# 电脑 B 查看及获取
+codex-sync relay list /path/to/shared-folder
+codex-sync relay pull /path/to/shared-folder
+```
+
+例如使用 Syncthing：先让两台电脑同步同一个 `CodexRelay` 文件夹，再分别运行：
+
+```bash
+codex-sync relay push ~/Sync/CodexRelay
+codex-sync relay pull ~/Sync/CodexRelay
+```
+
+例如使用 Windows OneDrive：
+
+```powershell
+codex-sync.exe relay push "$env:OneDrive\CodexRelay"
+codex-sync.exe relay pull "$env:OneDrive\CodexRelay"
+```
+
+使用云同步目录时，请等待云盘客户端完成上传或下载后再执行 `pull`。清单采用最后写入的原子替换方式，未完成的快照不会被识别为可导入快照。
+
 ## 同步策略与安全
 
 - 默认同步 `~/.codex`，排除 `auth.json`、凭据、日志、缓存和临时文件。
 - API 使用共享密钥认证；密钥不会经节点发现广播或写入 U 盘快照。
+- SMB 账号和密码由操作系统管理，不会写入 Codex Sync 配置或快照。
 - 默认只拉取。遇到同名但内容不同的文件时，远端版本保存为 `.conflict-节点名`，不会覆盖本地内容。
 - `pull --overwrite` 会覆盖不同内容的本地文件，使用前请自行备份。
 - 服务默认监听 `0.0.0.0:8787`，请只在可信局域网使用，并通过系统防火墙限制访问。
