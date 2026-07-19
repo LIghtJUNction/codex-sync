@@ -29,7 +29,7 @@ pub struct SshReport {
     pub backup: String,
 }
 
-pub fn push(host: &str, codex_home: Option<PathBuf>, keep_remote: bool) -> Result<SshReport> {
+pub fn push(host: &str, codex_home: Option<PathBuf>, mirror: bool) -> Result<SshReport> {
     validate_host(host)?;
     let home = dirs::home_dir().context("无法确定本机主目录")?;
     let codex_home = codex_home.unwrap_or_else(|| home.join(".codex"));
@@ -62,9 +62,9 @@ pub fn push(host: &str, codex_home: Option<PathBuf>, keep_remote: bool) -> Resul
                 .arg(&destination),
             "上传本机会话包",
         )?;
-        let keep_flag = if keep_remote { " --keep-remote" } else { "" };
+        let mirror_flag = if mirror { " --mirror" } else { "" };
         let remote_command = format!(
-            "bin=$(command -v codex-sync || true); if [ -z \"$bin\" ] && [ -x \"$HOME/.cargo/bin/codex-sync\" ]; then bin=\"$HOME/.cargo/bin/codex-sync\"; fi; if [ -z \"$bin\" ]; then echo '远端未安装 codex-sync 0.2.1+' >&2; exit 127; fi; \"$bin\" ssh receive --bundle \"$HOME/{remote_rel}\"{keep_flag}"
+            "bin=$(command -v codex-sync || true); if [ -z \"$bin\" ] && [ -x \"$HOME/.cargo/bin/codex-sync\" ]; then bin=\"$HOME/.cargo/bin/codex-sync\"; fi; if [ -z \"$bin\" ]; then echo '远端未安装 codex-sync 0.2.2+' >&2; exit 127; fi; \"$bin\" ssh receive --bundle \"$HOME/{remote_rel}\"{mirror_flag}"
         );
         let output = Command::new("ssh")
             .arg(host)
@@ -94,7 +94,7 @@ pub fn push(host: &str, codex_home: Option<PathBuf>, keep_remote: bool) -> Resul
     result
 }
 
-pub fn receive(bundle: &Path, codex_home: Option<PathBuf>, keep_remote: bool) -> Result<SshReport> {
+pub fn receive(bundle: &Path, codex_home: Option<PathBuf>, mirror: bool) -> Result<SshReport> {
     let home = dirs::home_dir().context("无法确定远端主目录")?;
     let codex_home = codex_home.unwrap_or_else(|| home.join(".codex"));
     fs::create_dir_all(&codex_home)?;
@@ -111,7 +111,7 @@ pub fn receive(bundle: &Path, codex_home: Option<PathBuf>, keep_remote: bool) ->
         backup: backup.to_string_lossy().into_owned(),
         ..Default::default()
     };
-    if !keep_remote {
+    if mirror {
         report.removed = remove_remote_only_files(&codex_home, &manifest, &backup)?;
     }
 
@@ -128,7 +128,7 @@ pub fn receive(bundle: &Path, codex_home: Option<PathBuf>, keep_remote: bool) ->
             if blake3::hash(&fs::read(&target)?).to_hex().as_str() == info.hash {
                 report.skipped += 1;
                 continue;
-            } else if keep_remote {
+            } else if !mirror {
                 report.conflicts += 1;
                 continue;
             } else {
@@ -149,7 +149,7 @@ pub fn receive(bundle: &Path, codex_home: Option<PathBuf>, keep_remote: bool) ->
         let source = bundle.join("files").join(name);
         if source.is_file() {
             let target = codex_home.join(name);
-            if keep_remote {
+            if !mirror {
                 merge_jsonl(&source, &target, &backup.join(name))?;
             } else {
                 if target.is_file() {
@@ -168,7 +168,7 @@ pub fn receive(bundle: &Path, codex_home: Option<PathBuf>, keep_remote: bool) ->
                 &target_db,
                 &backup.join("state_5.sqlite"),
                 target_provider.as_deref(),
-                keep_remote,
+                mirror,
             )?;
         } else {
             atomic_copy(&source_db, &target_db)?;
@@ -380,7 +380,7 @@ fn merge_database(
     target: &Path,
     backup: &Path,
     provider: Option<&str>,
-    keep_remote: bool,
+    mirror: bool,
 ) -> Result<usize> {
     let mut conn = Connection::open(target)?;
     conn.execute("VACUUM INTO ?1", params![backup.to_string_lossy().as_ref()])?;
@@ -390,7 +390,7 @@ fn merge_database(
     )?;
     let tx = conn.transaction()?;
     let mut inserted = 0;
-    if !keep_remote {
+    if mirror {
         for table in ["thread_dynamic_tools", "thread_spawn_edges"] {
             if table_exists(&tx, "main", table)? {
                 inserted += tx.execute(&format!("DELETE FROM main.\"{table}\""), [])?;
@@ -427,10 +427,10 @@ fn merge_database(
                 }
             })
             .collect::<Vec<_>>();
-        let verb = if keep_remote {
-            "INSERT OR IGNORE"
-        } else {
+        let verb = if mirror {
             "INSERT OR REPLACE"
+        } else {
+            "INSERT OR IGNORE"
         };
         let sql = format!(
             "{verb} INTO main.\"{table}\" ({}) SELECT {} FROM src.\"{table}\"",
@@ -561,7 +561,7 @@ mod tests {
         create_bundle(&local, &bundle)?;
         let report = receive(&bundle, Some(remote.clone()), false)?;
         assert_eq!(report.copied, 1);
-        assert!(report.database_rows >= 2);
+        assert_eq!(report.database_rows, 1);
         assert_eq!(report.removed, 0);
         let imported = remote.join("sessions/2026/07/19/rollout-local.jsonl");
         let text = fs::read_to_string(imported)?;
@@ -571,7 +571,7 @@ mod tests {
             .prepare("SELECT model_provider FROM threads ORDER BY id")?
             .query_map([], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
-        assert_eq!(providers, vec!["remote-provider"]);
+        assert_eq!(providers, vec!["remote-provider", "remote-provider"]);
         fs::remove_dir_all(root)?;
         Ok(())
     }

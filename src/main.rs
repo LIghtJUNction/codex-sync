@@ -163,9 +163,9 @@ enum SshCommand {
         /// 本机 Codex 数据目录
         #[arg(long)]
         codex_home: Option<PathBuf>,
-        /// 保留远端独有记录；默认远端最终只保留本机记录
+        /// 将远端活动历史镜像为本机集合；默认仅增量合并
         #[arg(long)]
-        keep_remote: bool,
+        mirror: bool,
     },
     /// 接收并合并已上传的安全包（供远端调用）
     #[command(hide = true)]
@@ -175,7 +175,7 @@ enum SshCommand {
         #[arg(long)]
         codex_home: Option<PathBuf>,
         #[arg(long)]
-        keep_remote: bool,
+        mirror: bool,
     },
 }
 
@@ -221,9 +221,9 @@ async fn main() -> Result<()> {
             SshCommand::Push {
                 host,
                 codex_home,
-                keep_remote,
+                mirror,
             } => {
-                let report = ssh_sync::push(host, codex_home.clone(), *keep_remote)?;
+                let report = ssh_sync::push(host, codex_home.clone(), *mirror)?;
                 println!(
                     "SSH 单向同步完成：新增/更新 {}，跳过 {}，移除远端独有 {}，冲突 {}，数据库变更 {}",
                     report.copied,
@@ -237,9 +237,9 @@ async fn main() -> Result<()> {
             SshCommand::Receive {
                 bundle,
                 codex_home,
-                keep_remote,
+                mirror,
             } => {
-                let report = ssh_sync::receive(bundle, codex_home.clone(), *keep_remote)?;
+                let report = ssh_sync::receive(bundle, codex_home.clone(), *mirror)?;
                 println!("CODEX_SYNC_REPORT={}", serde_json::to_string(&report)?);
             }
         }
