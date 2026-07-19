@@ -318,9 +318,11 @@ mod tests {
         let applied = merge(&paths, true)?;
         assert!(applied.backup.as_ref().is_some_and(|p| p.is_dir()));
         assert_eq!(rollout_provider(&rollout)?.as_deref(), Some("current"));
-        let state = Connection::open(codex.join("state_5.sqlite"))?;
-        let provider: String =
-            state.query_row("SELECT model_provider FROM threads", [], |r| r.get(0))?;
+        let provider: String = Connection::open(codex.join("state_5.sqlite"))?.query_row(
+            "SELECT model_provider FROM threads",
+            [],
+            |r| r.get(0),
+        )?;
         assert_eq!(provider, "current");
         let verified = inspect(&paths)?;
         assert_eq!(verified.rollout_files_to_change, 0);

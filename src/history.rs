@@ -1124,8 +1124,7 @@ mod tests {
         assert_eq!(verified.duplicate_session_meta_lines, 0);
         assert_eq!(verified.missing_session_index_entries, 0);
         assert_eq!(verified.stale_session_index_entries, 0);
-        let conn = open_database(&paths.database, true)?;
-        let assignment: (String, String) = conn.query_row(
+        let assignment: (String, String) = open_database(&paths.database, true)?.query_row(
             "SELECT model_provider, model FROM threads WHERE id='old'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
