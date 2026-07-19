@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0
+
 - Replace the flat module layout with Rust 2018+ `module.rs` plus `module/child.rs` structure, add a reusable library entry point, split CLI parsing from dispatch, and prohibit `mod.rs`.
 - Extract one reusable snapshot core for manifest generation, validation, hashing, incremental import, conflict handling, and atomic writes.
 - Implement HTTP/Web and USB/SMB/Relay as thin adapters over the shared `SnapshotSource` trait.
