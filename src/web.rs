@@ -9,6 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use std::{net::SocketAddr, sync::Arc};
+use subtle::ConstantTimeEq;
 
 type AppState = Arc<Config>;
 
@@ -35,22 +36,35 @@ pub async fn serve(cfg: Config) -> Result<()> {
 }
 
 fn authorized(headers: &HeaderMap, cfg: &Config) -> bool {
-    headers.get("authorization").and_then(|h| h.to_str().ok())
-        == Some(&format!("Bearer {}", cfg.shared_key))
+    let expected = format!("Bearer {}", cfg.shared_key);
+    headers
+        .get("authorization")
+        .map(|actual| actual.as_bytes().ct_eq(expected.as_bytes()).into())
+        .unwrap_or(false)
 }
 
 async fn index() -> Html<&'static str> {
     Html(include_str!("web.html"))
 }
 
-async fn status(State(cfg): State<AppState>) -> impl IntoResponse {
-    match sync::manifest(&cfg) {
+async fn status(State(cfg): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if !authorized(&headers, &cfg) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    status_response(&cfg)
+}
+
+fn status_response(cfg: &Config) -> axum::response::Response {
+    match sync::manifest(cfg) {
         Ok(m) => axum::Json(m).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
-async fn peers(State(cfg): State<AppState>) -> impl IntoResponse {
+async fn peers(State(cfg): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if !authorized(&headers, &cfg) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     match discovery::discover(&cfg, 2).await {
         Ok(p) => axum::Json(p).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -61,7 +75,7 @@ async fn manifest(State(cfg): State<AppState>, headers: HeaderMap) -> impl IntoR
     if !authorized(&headers, &cfg) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    status(State(cfg)).await.into_response()
+    status_response(&cfg)
 }
 
 async fn file(
@@ -72,10 +86,22 @@ async fn file(
     if !authorized(&headers, &cfg) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    match sync::safe_path(&cfg.sync_dir, &path).and_then(|p| std::fs::read(p).map_err(Into::into)) {
+    match read_served_file(&cfg, &path) {
         Ok(bytes) => Body::from(bytes).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+fn read_served_file(cfg: &Config, path: &str) -> Result<Vec<u8>> {
+    let file = sync::safe_path(&cfg.sync_dir, path)?;
+    let meta = std::fs::symlink_metadata(&file)?;
+    if !meta.file_type().is_file() || meta.file_type().is_symlink() {
+        anyhow::bail!("拒绝非普通文件");
+    }
+    if meta.len() > cfg.max_file_size_bytes {
+        anyhow::bail!("文件超过大小上限");
+    }
+    Ok(std::fs::read(file)?)
 }
 
 #[derive(serde::Deserialize)]
@@ -85,10 +111,38 @@ struct PullRequest {
 }
 async fn pull(
     State(cfg): State<AppState>,
+    headers: HeaderMap,
     axum::Json(req): axum::Json<PullRequest>,
 ) -> impl IntoResponse {
+    if !authorized(&headers, &cfg) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     match sync::pull(&cfg, &req.peer, req.overwrite.unwrap_or(false)).await {
         Ok(r) => axum::Json(r).into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderValue, header::AUTHORIZATION};
+
+    #[test]
+    fn every_request_needs_the_exact_shared_key() {
+        let cfg = Config {
+            shared_key: "a very long test key that exceeds thirty two chars".into(),
+            ..Config::default()
+        };
+        let mut valid = HeaderMap::new();
+        valid.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer a very long test key that exceeds thirty two chars"),
+        );
+        let mut invalid = HeaderMap::new();
+        invalid.insert(AUTHORIZATION, HeaderValue::from_static("Bearer wrong"));
+        assert!(authorized(&valid, &cfg));
+        assert!(!authorized(&invalid, &cfg));
+        assert!(!authorized(&HeaderMap::new(), &cfg));
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "codex-sync"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2024"
 description = "Sync and merge Codex conversations across computers, LAN, SSH, and offline storage"
 license = "MIT"
@@ -24,4 +24,5 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 toml = "0.9"
 tower-http = { version = "0.6", features = ["trace"] }
+subtle = "2"
 walkdir = "2"

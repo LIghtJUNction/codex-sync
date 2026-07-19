@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -15,6 +17,10 @@ pub struct Config {
     pub shared_key: String,
     pub exclude: Vec<String>,
     pub auto_pull_seconds: u64,
+    /// Maximum individual file size accepted from LAN or offline snapshots.
+    pub max_file_size_bytes: u64,
+    /// Maximum number of files accepted in one manifest.
+    pub max_files: usize,
 }
 
 impl Default for Config {
@@ -39,6 +45,8 @@ impl Default for Config {
                 ".DS_Store".into(),
             ],
             auto_pull_seconds: 0,
+            max_file_size_bytes: 256 * 1024 * 1024,
+            max_files: 100_000,
         }
     }
 }
@@ -58,6 +66,8 @@ impl Config {
             fs::create_dir_all(parent)?;
         }
         fs::write(path, toml::to_string_pretty(&Self::default())?)?;
+        #[cfg(unix)]
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
         Ok(())
     }
 
@@ -68,11 +78,32 @@ impl Config {
         if cfg.shared_key.starts_with("请修改") {
             bail!("请先修改配置中的 shared_key");
         }
+        if cfg.shared_key.chars().count() < 32 {
+            bail!("shared_key 至少需要 32 个字符，请使用随机长字符串");
+        }
+        if cfg.max_file_size_bytes == 0 || cfg.max_files == 0 {
+            bail!("max_file_size_bytes 和 max_files 必须大于 0");
+        }
         Ok(cfg)
     }
 
     pub fn node_id(&self) -> String {
         blake3::hash(format!("{}:{}", self.node_name, self.shared_key).as_bytes()).to_hex()[..12]
             .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_short_shared_key() {
+        let root =
+            std::env::temp_dir().join(format!("codex-sync-config-test-{}", std::process::id()));
+        let _ = fs::remove_file(&root);
+        fs::write(&root, "shared_key = 'short'\n").unwrap();
+        assert!(Config::load(&root).is_err());
+        let _ = fs::remove_file(root);
     }
 }
