@@ -52,10 +52,10 @@ pub async fn discover(cfg: &Config, seconds: u64) -> Result<Vec<Peer>> {
         }
         match tokio::time::timeout(remaining, socket.recv_from(&mut buf)).await {
             Ok(Ok((n, _))) => {
-                if let Ok(peer) = serde_json::from_slice::<Peer>(&buf[..n]) {
-                    if peer.node_id != cfg.node_id() {
-                        peers.insert(peer.node_id.clone(), peer);
-                    }
+                if let Ok(peer) = serde_json::from_slice::<Peer>(&buf[..n])
+                    && peer.node_id != cfg.node_id()
+                {
+                    peers.insert(peer.node_id.clone(), peer);
                 }
             }
             _ => break,

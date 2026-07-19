@@ -156,8 +156,10 @@ mod tests {
 
     #[test]
     fn missing_usb_directory_is_rejected() {
-        let mut cfg = Config::default();
-        cfg.shared_key = "test-key".into();
+        let cfg = Config {
+            shared_key: "test-key".into(),
+            ..Config::default()
+        };
         assert!(export(&cfg, Path::new("/definitely/not/a/real/usb/path")).is_err());
     }
 
@@ -173,10 +175,12 @@ mod tests {
         fs::write(source.join("sessions/chat.jsonl"), b"hello codex")?;
         fs::write(source.join("auth.json"), b"must not leave computer")?;
 
-        let mut a = Config::default();
-        a.node_name = "computer-a".into();
-        a.shared_key = "same-key".into();
-        a.sync_dir = source;
+        let a = Config {
+            node_name: "computer-a".into(),
+            shared_key: "same-key".into(),
+            sync_dir: source,
+            ..Config::default()
+        };
         let mut b = a.clone();
         b.node_name = "computer-b".into();
         b.sync_dir = destination.clone();

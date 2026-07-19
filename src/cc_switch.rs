@@ -215,10 +215,10 @@ fn rewrite_rollouts(paths: &Paths, target: &str, backup: &Path) -> Result<()> {
         let mut output = String::new();
         for line in fs::read_to_string(&path)?.lines() {
             let mut value: Value = serde_json::from_str(line)?;
-            if value.get("type").and_then(Value::as_str) == Some("session_meta") {
-                if let Some(payload) = value.get_mut("payload").and_then(Value::as_object_mut) {
-                    payload.insert("model_provider".into(), Value::String(target.into()));
-                }
+            if value.get("type").and_then(Value::as_str) == Some("session_meta")
+                && let Some(payload) = value.get_mut("payload").and_then(Value::as_object_mut)
+            {
+                payload.insert("model_provider".into(), Value::String(target.into()));
             }
             output.push_str(&serde_json::to_string(&value)?);
             output.push('\n');

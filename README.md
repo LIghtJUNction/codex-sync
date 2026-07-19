@@ -128,6 +128,31 @@ codex-sync cc-switch merge --apply
 
 “把本机记录同步到某个目标”始终表示单向的“本机 → 目标”。目标端只作为写入位置，不会自动读取、下载或合并目标端已有的 Codex 记录。只有明确执行 `pull`、`import` 或提出从远端恢复时，才会把远端数据带回本机。
 
+## SSH 单向同步并合并
+
+本机与远端都安装 `codex-sync` 后，只需运行：
+
+```bash
+codex-sync ssh push lty
+```
+
+`lty` 可以是 `~/.ssh/config` 中的主机别名，也可以是 `user@host`。该命令固定执行“本机 → 远端”：
+
+- 只从本机 `~/.codex` 提取会话、归档会话、附件、索引和 SQLite 线程记录。
+- 不读取或下载远端已有聊天记录。
+- 使用系统 `ssh`/`scp`，沿用现有 SSH Agent、密钥和主机配置。
+- 上传后由远端 `codex-sync` 校验 BLAKE3 清单，再合并进远端 `~/.codex`。
+- 保留远端已有记录；同 ID 数据不会覆盖。
+- 导入的会话自动归入远端当前 `model_provider`。
+- 修改前备份远端数据库和索引到 `~/.codex/codex-sync-backups/ssh-import-时间戳`。
+- 合并完成后自动删除两端临时传输包。
+
+如果远端尚未安装：
+
+```bash
+ssh lty 'cargo install codex-sync'
+```
+
 ## 同步策略与安全
 
 - 默认同步 `~/.codex`，排除 `auth.json`、凭据、日志、缓存和临时文件。

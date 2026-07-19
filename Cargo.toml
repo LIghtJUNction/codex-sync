@@ -1,8 +1,8 @@
 [package]
 name = "codex-sync"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Sync Codex conversations and configuration across computers on a LAN"
+description = "Sync and merge Codex conversations across computers, LAN, SSH, and offline storage"
 license = "MIT"
 repository = "https://github.com/LIghtJUNction/codex-sync"
 homepage = "https://github.com/LIghtJUNction/codex-sync"

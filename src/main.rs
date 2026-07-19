@@ -1,6 +1,7 @@
 mod cc_switch;
 mod config;
 mod discovery;
+mod ssh_sync;
 mod sync;
 mod usb;
 mod web;
@@ -70,6 +71,11 @@ enum Command {
         /// 覆盖 CC-Switch 数据目录
         #[arg(long)]
         cc_switch_home: Option<PathBuf>,
+    },
+    /// 通过 SSH 将本机聊天记录单向合并到远端 Codex
+    Ssh {
+        #[command(subcommand)]
+        command: SshCommand,
     },
 }
 
@@ -148,6 +154,26 @@ enum CcSwitchCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum SshCommand {
+    /// 将本机记录单向推送并合并到远端；绝不拉取远端记录
+    Push {
+        /// SSH 主机或 ~/.ssh/config 中的别名
+        host: String,
+        /// 本机 Codex 数据目录
+        #[arg(long)]
+        codex_home: Option<PathBuf>,
+    },
+    /// 接收并合并已上传的安全包（供远端调用）
+    #[command(hide = true)]
+    Receive {
+        #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long)]
+        codex_home: Option<PathBuf>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -180,6 +206,24 @@ async fn main() -> Result<()> {
                 } else {
                     println!("以上为预览。关闭 Codex 和 CC-Switch 后，添加 --apply 执行合并。");
                 }
+            }
+        }
+        return Ok(());
+    }
+
+    if let Command::Ssh { command } = &cli.command {
+        match command {
+            SshCommand::Push { host, codex_home } => {
+                let report = ssh_sync::push(host, codex_home.clone())?;
+                println!(
+                    "SSH 单向同步完成：新增 {}，跳过 {}，冲突 {}，数据库新增 {}",
+                    report.copied, report.skipped, report.conflicts, report.database_rows
+                );
+                println!("远端备份：{}", report.backup);
+            }
+            SshCommand::Receive { bundle, codex_home } => {
+                let report = ssh_sync::receive(bundle, codex_home.clone())?;
+                println!("CODEX_SYNC_REPORT={}", serde_json::to_string(&report)?);
             }
         }
         return Ok(());
@@ -283,6 +327,7 @@ async fn main() -> Result<()> {
             }
         },
         Command::CcSwitch { .. } => unreachable!(),
+        Command::Ssh { .. } => unreachable!(),
         Command::Init { .. } => unreachable!(),
     }
     Ok(())
