@@ -131,6 +131,33 @@ codex-sync cc-switch merge --apply
 
 合并会同时更新会话 JSONL 的 `model_provider` 和 `state_5.sqlite` 的记录桶。执行前自动备份到 `~/.codex/codex-sync-backups/cc-switch-merge-时间戳`，该目录默认不会参与设备同步。此操作不读取、复制或修改 API Key、Token、`auth.json` 和供应商认证配置。
 
+## 修复本机多 provider / model 历史
+
+如果切换 API、provider、模型或登录方式后，本机历史文件还在但 Codex 侧栏不再显示，可以使用不依赖 CC-Switch 的 `history` 命令。先预览：
+
+```bash
+codex-sync history status
+codex-sync history merge
+```
+
+确认待归并数量后执行：
+
+```bash
+codex-sync history merge --apply
+```
+
+该命令会把 `state_5.sqlite` 的线程归属和会话 JSONL 的 `session_meta` 统一到当前 `config.toml` 中的 `model_provider` / `model`，并补齐 `session_index.jsonl` 缺少的侧栏条目。使用 ChatGPT 登录且没有显式配置 `model_provider` 时，采用 Codex 内置的 `openai` provider。修改前会在线备份数据库、侧栏索引和会话文件，因此 Codex 正在运行时也会等待数据库写锁；若仍繁忙则安全失败，不会跳过备份强行写入。
+
+手动备份和恢复：
+
+```bash
+codex-sync history backup
+codex-sync history restore ~/.codex/codex-sync-backups/history-merge-时间戳
+codex-sync history restore ~/.codex/codex-sync-backups/history-merge-时间戳 --apply
+```
+
+恢复默认也只预览，并且正式恢复前会再创建一份 `pre-history-restore` 安全备份。本功能的设计参考了 [GODGOD126/codex-history-sync-tool](https://github.com/GODGOD126/codex-history-sync-tool)，并在 Rust CLI 中扩展为 macOS、Linux 和 Windows 通用实现。
+
 ## 默认同步方向
 
 “把本机记录同步到某个目标”始终表示单向的“本机 → 目标”。目标端只作为写入位置，不会自动读取、下载或合并目标端已有的 Codex 记录。只有明确执行 `pull`、`import` 或提出从远端恢复时，才会把远端数据带回本机。
@@ -151,6 +178,7 @@ codex-sync ssh push lty
 - 上传后由远端 `codex-sync` 校验 BLAKE3 清单，再合并进远端 `~/.codex`。
 - 默认进行增量合并：只追加本机新增记录，保留远端已有记录，且绝不把远端记录下载回本机。
 - 同名 JSONL 会话会按事件行去重合并；同名附件或二进制文件仍保留远端版本并报告冲突。
+- 每个 rollout 始终只保留一条 `session_meta`；数据库合并后按线程 ID 自动重建 `session_index.jsonl`，避免记录已入库但侧栏缺失。
 - 仅在明确需要让远端完全等同于本机时，使用 `codex-sync ssh push HOST --mirror`；远端独有记录会先备份再移出活动历史。
 - 导入的会话自动归入远端当前 `model_provider`。
 - 修改前备份远端数据库和索引到 `~/.codex/codex-sync-backups/ssh-import-时间戳`。

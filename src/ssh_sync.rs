@@ -1,4 +1,7 @@
-use crate::sync::{FileInfo, safe_path};
+use crate::{
+    history,
+    sync::{FileInfo, safe_path},
+};
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -26,6 +29,8 @@ pub struct SshReport {
     pub conflicts: usize,
     pub removed: usize,
     pub database_rows: usize,
+    #[serde(default)]
+    pub index_entries_added: usize,
     pub backup: String,
 }
 
@@ -181,6 +186,7 @@ pub fn receive(bundle: &Path, codex_home: Option<PathBuf>, mirror: bool) -> Resu
             atomic_copy(&source_db, &target_db)?;
         }
     }
+    report.index_entries_added = history::reconcile_session_index(&codex_home)?;
     Ok(report)
 }
 
@@ -340,20 +346,16 @@ fn atomic_copy(source: &Path, target: &Path) -> Result<()> {
 }
 
 fn copy_rollout(source: &Path, target: &Path, provider: Option<&str>) -> Result<()> {
-    let Some(provider) = provider else {
-        return atomic_copy(source, target);
-    };
+    let mut seen = HashSet::new();
+    let mut saw_session_meta = false;
     let mut output = String::new();
-    for line in fs::read_to_string(source)?.lines() {
-        let mut value: Value = serde_json::from_str(line)?;
-        if value.get("type").and_then(Value::as_str) == Some("session_meta")
-            && let Some(payload) = value.get_mut("payload").and_then(Value::as_object_mut)
-        {
-            payload.insert("model_provider".into(), Value::String(provider.into()));
-        }
-        output.push_str(&serde_json::to_string(&value)?);
-        output.push('\n');
-    }
+    append_rollout(
+        &fs::read_to_string(source)?,
+        provider,
+        &mut seen,
+        &mut saw_session_meta,
+        &mut output,
+    )?;
     let temp = target.with_extension("jsonl.codex-sync-tmp");
     fs::write(&temp, output)?;
     fs::rename(temp, target)?;
@@ -361,25 +363,48 @@ fn copy_rollout(source: &Path, target: &Path, provider: Option<&str>) -> Result<
 }
 
 fn merge_rollout(source: &Path, target: &Path, provider: Option<&str>) -> Result<()> {
-    let existing = fs::read_to_string(target)?;
     let mut seen = HashSet::new();
-    for line in existing.lines() {
-        let canonical = serde_json::from_str::<Value>(line)
-            .and_then(|value| serde_json::to_string(&value))
-            .unwrap_or_else(|_| line.to_owned());
-        seen.insert(canonical);
-    }
-    let mut output = existing;
-    if !output.is_empty() && !output.ends_with('\n') {
-        output.push('\n');
-    }
-    for line in fs::read_to_string(source)?.lines() {
+    let mut saw_session_meta = false;
+    let mut output = String::new();
+    append_rollout(
+        &fs::read_to_string(target)?,
+        provider,
+        &mut seen,
+        &mut saw_session_meta,
+        &mut output,
+    )?;
+    append_rollout(
+        &fs::read_to_string(source)?,
+        provider,
+        &mut seen,
+        &mut saw_session_meta,
+        &mut output,
+    )?;
+    let temp = target.with_extension("jsonl.codex-sync-tmp");
+    fs::write(&temp, output)?;
+    fs::rename(temp, target)?;
+    Ok(())
+}
+
+fn append_rollout(
+    text: &str,
+    provider: Option<&str>,
+    seen: &mut HashSet<String>,
+    saw_session_meta: &mut bool,
+    output: &mut String,
+) -> Result<()> {
+    for line in text.lines() {
         let mut value: Value = serde_json::from_str(line)?;
-        if value.get("type").and_then(Value::as_str) == Some("session_meta")
-            && let Some(provider) = provider
-            && let Some(payload) = value.get_mut("payload").and_then(Value::as_object_mut)
-        {
-            payload.insert("model_provider".into(), Value::String(provider.into()));
+        if value.get("type").and_then(Value::as_str) == Some("session_meta") {
+            if *saw_session_meta {
+                continue;
+            }
+            *saw_session_meta = true;
+            if let Some(provider) = provider
+                && let Some(payload) = value.get_mut("payload").and_then(Value::as_object_mut)
+            {
+                payload.insert("model_provider".into(), Value::String(provider.into()));
+            }
         }
         let rendered = serde_json::to_string(&value)?;
         if seen.insert(rendered.clone()) {
@@ -387,9 +412,6 @@ fn merge_rollout(source: &Path, target: &Path, provider: Option<&str>) -> Result
             output.push('\n');
         }
     }
-    let temp = target.with_extension("jsonl.codex-sync-tmp");
-    fs::write(&temp, output)?;
-    fs::rename(temp, target)?;
     Ok(())
 }
 
@@ -508,7 +530,13 @@ fn table_columns(conn: &Connection, schema: &str, table: &str) -> Result<Vec<Str
 fn active_model_provider(codex_home: &Path) -> Option<String> {
     let text = fs::read_to_string(codex_home.join("config.toml")).ok()?;
     let value: toml::Value = toml::from_str(&text).ok()?;
-    value.get("model_provider")?.as_str().map(str::to_owned)
+    Some(
+        value
+            .get("model_provider")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("openai")
+            .to_owned(),
+    )
 }
 
 fn validate_host(host: &str) -> Result<()> {
@@ -606,6 +634,7 @@ mod tests {
         let report = receive(&bundle, Some(remote.clone()), false)?;
         assert_eq!(report.copied, 1);
         assert_eq!(report.database_rows, 1);
+        assert_eq!(report.index_entries_added, 2);
         assert_eq!(report.removed, 0);
         let imported = remote.join("sessions/2026/07/19/rollout-local.jsonl");
         let text = fs::read_to_string(imported)?;
@@ -616,6 +645,10 @@ mod tests {
             .query_map([], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         assert_eq!(providers, vec!["remote-provider", "remote-provider"]);
+        let index = fs::read_to_string(remote.join("session_index.jsonl"))?;
+        assert_eq!(index.lines().count(), 2);
+        assert!(index.contains("\"id\":\"local\""));
+        assert!(index.contains("\"id\":\"remote\""));
         fs::remove_dir_all(root)?;
         Ok(())
     }
@@ -641,6 +674,30 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("\"id\":\"a\"")));
         assert!(lines.iter().any(|line| line.contains("\"id\":\"b\"")));
         assert!(lines.iter().any(|line| line.contains("\"id\":\"c\"")));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn merge_rollout_keeps_only_one_session_meta() -> Result<()> {
+        let root = temp_dir();
+        fs::create_dir_all(&root)?;
+        let local = root.join("local.jsonl");
+        let remote = root.join("remote.jsonl");
+        fs::write(
+            &local,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"one\",\"model_provider\":\"local\"}}\n{\"type\":\"event\",\"id\":\"local\"}\n",
+        )?;
+        fs::write(
+            &remote,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"one\",\"model_provider\":\"remote-old\"}}\n{\"type\":\"session_meta\",\"payload\":{\"id\":\"one\",\"model_provider\":\"duplicate\"}}\n{\"type\":\"event\",\"id\":\"remote\"}\n",
+        )?;
+        merge_rollout(&local, &remote, Some("openai"))?;
+        let merged = fs::read_to_string(&remote)?;
+        assert_eq!(merged.matches("session_meta").count(), 1);
+        assert!(merged.contains("\"model_provider\":\"openai\""));
+        assert!(merged.contains("\"id\":\"local\""));
+        assert!(merged.contains("\"id\":\"remote\""));
         fs::remove_dir_all(root)?;
         Ok(())
     }

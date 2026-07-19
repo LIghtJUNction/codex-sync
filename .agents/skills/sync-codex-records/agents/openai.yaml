@@ -1,4 +1,4 @@
 interface:
   display_name: "同步 Codex 聊天记录"
-  short_description: "安全地通过局域网、U盘、SMB或共享目录同步 Codex 记录"
-  default_prompt: "使用 $sync-codex-records 帮我同步这台电脑上的 Codex 聊天记录。"
+  short_description: "安全同步、合并并修复本机或多设备的 Codex 历史记录"
+  default_prompt: "使用 $sync-codex-records 安全同步或修复这台电脑上的 Codex 聊天记录。"

@@ -1,6 +1,7 @@
 mod cc_switch;
 mod config;
 mod discovery;
+mod history;
 mod ssh_sync;
 mod sync;
 mod usb;
@@ -71,6 +72,14 @@ enum Command {
         /// 覆盖 CC-Switch 数据目录
         #[arg(long)]
         cc_switch_home: Option<PathBuf>,
+    },
+    /// 修复本机因 provider、模型或登录方式切换而隐藏的历史记录
+    History {
+        #[command(subcommand)]
+        command: HistoryCommand,
+        /// 覆盖 Codex 数据目录（用于测试或非默认安装）
+        #[arg(long)]
+        codex_home: Option<PathBuf>,
     },
     /// 通过 SSH 将本机聊天记录单向合并到远端 Codex
     Ssh {
@@ -155,6 +164,29 @@ enum CcSwitchCommand {
 }
 
 #[derive(Subcommand)]
+enum HistoryCommand {
+    /// 显示当前 provider/model 与本地历史记录的归属情况
+    Status,
+    /// 将本机所有历史记录归入当前 provider/model；默认只预览
+    #[command(alias = "sync")]
+    Merge {
+        /// 实际执行；未提供时不修改任何文件
+        #[arg(long)]
+        apply: bool,
+    },
+    /// 手动备份历史数据库、侧栏索引和会话元数据
+    Backup,
+    /// 从指定备份恢复；默认只显示将要恢复的备份
+    Restore {
+        /// history 备份目录
+        backup: PathBuf,
+        /// 实际执行恢复
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum SshCommand {
     /// 将本机记录单向推送并合并到远端；绝不拉取远端记录
     Push {
@@ -216,6 +248,43 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Command::History {
+        command,
+        codex_home,
+    } = &cli.command
+    {
+        let paths = history::Paths::resolve(codex_home.clone())?;
+        match command {
+            HistoryCommand::Status => history::print_report(&history::inspect(&paths)?),
+            HistoryCommand::Merge { apply } => {
+                let report = history::merge(&paths, *apply)?;
+                history::print_report(&report);
+                if *apply {
+                    if let Some(backup) = report.backup {
+                        println!("本地历史合并完成；备份：{}", backup.display());
+                    }
+                } else {
+                    println!("以上为预览；添加 --apply 后才会修改本地历史。");
+                }
+            }
+            HistoryCommand::Backup => {
+                let backup = history::backup(&paths, "manual")?;
+                println!("历史备份已创建：{}", backup.display());
+            }
+            HistoryCommand::Restore { backup, apply } => {
+                if *apply {
+                    let safety = history::restore(&paths, backup)?;
+                    println!("历史已从 {} 恢复", backup.display());
+                    println!("恢复前安全备份：{}", safety.display());
+                } else {
+                    history::validate_backup(backup)?;
+                    println!("将从 {} 恢复；添加 --apply 后才会执行。", backup.display());
+                }
+            }
+        }
+        return Ok(());
+    }
+
     if let Command::Ssh { command } = &cli.command {
         match command {
             SshCommand::Push {
@@ -225,12 +294,13 @@ async fn main() -> Result<()> {
             } => {
                 let report = ssh_sync::push(host, codex_home.clone(), *mirror)?;
                 println!(
-                    "SSH 单向同步完成：新增/更新 {}，跳过 {}，移除远端独有 {}，冲突 {}，数据库变更 {}",
+                    "SSH 单向同步完成：新增/更新 {}，跳过 {}，移除远端独有 {}，冲突 {}，数据库变更 {}，侧栏索引补齐 {}",
                     report.copied,
                     report.skipped,
                     report.removed,
                     report.conflicts,
-                    report.database_rows
+                    report.database_rows,
+                    report.index_entries_added
                 );
                 println!("远端备份：{}", report.backup);
             }
@@ -344,6 +414,7 @@ async fn main() -> Result<()> {
             }
         },
         Command::CcSwitch { .. } => unreachable!(),
+        Command::History { .. } => unreachable!(),
         Command::Ssh { .. } => unreachable!(),
         Command::Init { .. } => unreachable!(),
     }
