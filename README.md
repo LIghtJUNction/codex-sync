@@ -119,3 +119,7 @@ codex-sync.exe relay pull "$env:OneDrive\CodexRelay"
 ## 当前范围
 
 这是可用的 MVP：文件清单、哈希比较、节点发现、手动拉取和 Web 管理均已实现。自动后台双向同步、设备审批、TLS、冲突合并与系统服务安装可作为后续版本加入。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE) 开源。
