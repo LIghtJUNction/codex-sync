@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 description = "Sync Codex conversations and configuration across computers on a LAN"
 license = "MIT"
+repository = "https://github.com/LIghtJUNction/codex-sync"
+homepage = "https://github.com/LIghtJUNction/codex-sync"
+readme = "README.md"
+keywords = ["codex", "sync", "backup", "lan", "cli"]
+exclude = [".agents/**"]
 
 [dependencies]
 anyhow = "1"
