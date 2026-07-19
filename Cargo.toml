@@ -1,6 +1,6 @@
 [package]
 name = "codex-sync"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 description = "Sync and merge Codex conversations across computers, LAN, SSH, and offline storage"
 license = "MIT"

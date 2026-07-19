@@ -129,6 +129,13 @@ pub fn receive(bundle: &Path, codex_home: Option<PathBuf>, mirror: bool) -> Resu
                 report.skipped += 1;
                 continue;
             } else if !mirror {
+                if info.path.starts_with("sessions/") || info.path.starts_with("archived_sessions/")
+                {
+                    atomic_copy(&target, &backup.join("merged").join(&info.path))?;
+                    merge_rollout(&source, &target, target_provider.as_deref())?;
+                    report.copied += 1;
+                    continue;
+                }
                 report.conflicts += 1;
                 continue;
             } else {
@@ -353,6 +360,39 @@ fn copy_rollout(source: &Path, target: &Path, provider: Option<&str>) -> Result<
     Ok(())
 }
 
+fn merge_rollout(source: &Path, target: &Path, provider: Option<&str>) -> Result<()> {
+    let existing = fs::read_to_string(target)?;
+    let mut seen = HashSet::new();
+    for line in existing.lines() {
+        let canonical = serde_json::from_str::<Value>(line)
+            .and_then(|value| serde_json::to_string(&value))
+            .unwrap_or_else(|_| line.to_owned());
+        seen.insert(canonical);
+    }
+    let mut output = existing;
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    for line in fs::read_to_string(source)?.lines() {
+        let mut value: Value = serde_json::from_str(line)?;
+        if value.get("type").and_then(Value::as_str) == Some("session_meta")
+            && let Some(provider) = provider
+            && let Some(payload) = value.get_mut("payload").and_then(Value::as_object_mut)
+        {
+            payload.insert("model_provider".into(), Value::String(provider.into()));
+        }
+        let rendered = serde_json::to_string(&value)?;
+        if seen.insert(rendered.clone()) {
+            output.push_str(&rendered);
+            output.push('\n');
+        }
+    }
+    let temp = target.with_extension("jsonl.codex-sync-tmp");
+    fs::write(&temp, output)?;
+    fs::rename(temp, target)?;
+    Ok(())
+}
+
 fn merge_jsonl(source: &Path, target: &Path, backup: &Path) -> Result<()> {
     let existing = fs::read_to_string(target).unwrap_or_default();
     if target.is_file() {
@@ -510,9 +550,13 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         std::env::temp_dir().join(format!(
-            "codex-sync-ssh-test-{}-{}",
+            "codex-sync-ssh-test-{}-{}-{}",
             std::process::id(),
-            now()
+            now(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
         ))
     }
 
@@ -572,6 +616,31 @@ mod tests {
             .query_map([], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         assert_eq!(providers, vec!["remote-provider", "remote-provider"]);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn merge_rollout_preserves_both_sides() -> Result<()> {
+        let root = temp_dir();
+        fs::create_dir_all(&root)?;
+        let local = root.join("local.jsonl");
+        let remote = root.join("remote.jsonl");
+        fs::write(
+            &local,
+            "{\"type\":\"event\",\"id\":\"a\"}\n{\"type\":\"event\",\"id\":\"b\"}\n",
+        )?;
+        fs::write(
+            &remote,
+            "{\"type\":\"event\",\"id\":\"a\"}\n{\"type\":\"event\",\"id\":\"c\"}\n",
+        )?;
+        merge_rollout(&local, &remote, None)?;
+        let merged = fs::read_to_string(&remote)?;
+        let lines: Vec<_> = merged.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines.iter().any(|line| line.contains("\"id\":\"a\"")));
+        assert!(lines.iter().any(|line| line.contains("\"id\":\"b\"")));
+        assert!(lines.iter().any(|line| line.contains("\"id\":\"c\"")));
         fs::remove_dir_all(root)?;
         Ok(())
     }

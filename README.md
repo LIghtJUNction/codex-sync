@@ -143,6 +143,7 @@ codex-sync ssh push lty
 - 使用系统 `ssh`/`scp`，沿用现有 SSH Agent、密钥和主机配置。
 - 上传后由远端 `codex-sync` 校验 BLAKE3 清单，再合并进远端 `~/.codex`。
 - 默认进行增量合并：只追加本机新增记录，保留远端已有记录，且绝不把远端记录下载回本机。
+- 同名 JSONL 会话会按事件行去重合并；同名附件或二进制文件仍保留远端版本并报告冲突。
 - 仅在明确需要让远端完全等同于本机时，使用 `codex-sync ssh push HOST --mirror`；远端独有记录会先备份再移出活动历史。
 - 导入的会话自动归入远端当前 `model_provider`。
 - 修改前备份远端数据库和索引到 `~/.codex/codex-sync-backups/ssh-import-时间戳`。
